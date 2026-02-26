@@ -15,7 +15,7 @@ from astrbot.api import logger
 
 # 知乎专栏配置
 ZHIHU_COLUMN_ID = "c_1885342192987509163"  # 橘鸦的 AI 日志
-ZHIHU_COLUMN_API = f"https://zhuanlan.zhihu.com/api/columns/{ZHIHU_COLUMN_ID}/posts"
+ZHIHU_COLUMN_API = f"https://www.zhihu.com/api/v4/columns/{ZHIHU_COLUMN_ID}/items"
 ZHIHU_ARTICLE_KEYWORD = "早报"  # 筛选标题含此关键词的文章
 
 # AI 总结 prompt
@@ -241,7 +241,7 @@ class DailyAINewsPlugin(Star):
     async def _fetch_from_column_api(
         self, session: aiohttp.ClientSession, headers: dict
     ) -> Optional[Dict]:
-        """通过知乎专栏 API 获取文章列表。"""
+        """通过知乎 v4 API 获取专栏文章列表。"""
         try:
             url = f"{ZHIHU_COLUMN_API}?limit=10&offset=0"
             async with session.get(url, headers=headers) as resp:
@@ -251,24 +251,24 @@ class DailyAINewsPlugin(Star):
 
                 data = await resp.json()
 
-                # API 返回的是文章列表
-                articles = data if isinstance(data, list) else data.get("data", [])
+                # v4 API 返回格式: {"data": [...], "paging": {...}}
+                articles = data.get("data", [])
 
                 for item in articles:
                     title = item.get("title", "")
                     if ZHIHU_ARTICLE_KEYWORD in title:
+                        article_id = str(item.get("id", ""))
                         content = item.get("content", "")
                         if not content:
-                            # 如果 API 没返回内容，尝试获取文章详情
-                            article_url = f"https://zhuanlan.zhihu.com/p/{item['id']}"
-                            content = await self._fetch_article_content(
-                                session, article_url, headers
+                            # 如果 API 没返回全文，通过文章 API 获取
+                            content = await self._fetch_article_by_id(
+                                session, article_id, headers
                             )
 
                         return {
-                            "id": str(item.get("id", "")),
+                            "id": article_id,
                             "title": title,
-                            "url": f"https://zhuanlan.zhihu.com/p/{item['id']}",
+                            "url": f"https://zhuanlan.zhihu.com/p/{article_id}",
                             "content": self._clean_html(content),
                             "created": item.get("created", 0),
                         }
@@ -281,71 +281,66 @@ class DailyAINewsPlugin(Star):
     async def _fetch_from_column_page(
         self, session: aiohttp.ClientSession, headers: dict
     ) -> Optional[Dict]:
-        """从知乎专栏页面 HTML 中提取最新早报文章链接，再获取内容。"""
+        """回退方案：通过旧版专栏 API 获取文章列表。"""
         try:
-            column_url = f"https://www.zhihu.com/column/{ZHIHU_COLUMN_ID}"
-            async with session.get(column_url, headers=headers) as resp:
+            # 尝试旧版 zhuanlan API
+            old_api_url = f"https://zhuanlan.zhihu.com/api/columns/{ZHIHU_COLUMN_ID}/articles?limit=10&offset=0"
+            async with session.get(old_api_url, headers=headers) as resp:
                 if resp.status != 200:
-                    logger.warning(f"知乎专栏页面返回状态码 {resp.status}")
+                    logger.warning(f"知乎旧版 API 返回状态码 {resp.status}")
                     return None
 
-                html = await resp.text()
+                data = await resp.json()
 
-            # 从 HTML 中提取初始数据（知乎将数据嵌入在 script 标签中）
-            data_match = re.search(
-                r'<script\s+id="js-initialData"\s+type="text/json">(.*?)</script>',
-                html,
-                re.DOTALL,
-            )
-            if not data_match:
-                logger.warning("未能从页面中提取数据")
-                return None
+                # 旧版 API 可能直接返回列表或 {"data": [...]}
+                articles = data if isinstance(data, list) else data.get("data", [])
 
-            init_data = json.loads(data_match.group(1))
+                for item in articles:
+                    title = item.get("title", "")
+                    if ZHIHU_ARTICLE_KEYWORD in title:
+                        article_id = str(item.get("id", ""))
+                        content = item.get("content", "")
 
-            # 遍历文章数据
-            articles = (
-                init_data.get("initialState", {})
-                .get("entities", {})
-                .get("articles", {})
-            )
+                        if not content:
+                            content = await self._fetch_article_by_id(
+                                session, article_id, headers
+                            )
 
-            for article_id, article_data in articles.items():
-                title = article_data.get("title", "")
-                if ZHIHU_ARTICLE_KEYWORD in title:
-                    content = article_data.get("content", "")
-                    article_url = f"https://zhuanlan.zhihu.com/p/{article_id}"
-
-                    if not content:
-                        content = await self._fetch_article_content(
-                            session, article_url, headers
-                        )
-
-                    return {
-                        "id": str(article_id),
-                        "title": title,
-                        "url": article_url,
-                        "content": self._clean_html(content),
-                        "created": article_data.get("created", 0),
-                    }
+                        return {
+                            "id": article_id,
+                            "title": title,
+                            "url": f"https://zhuanlan.zhihu.com/p/{article_id}",
+                            "content": self._clean_html(content),
+                            "created": item.get("created", 0),
+                        }
 
         except Exception as e:
-            logger.warning(f"知乎专栏页面解析异常: {e}")
+            logger.warning(f"知乎旧版 API 请求异常: {e}")
 
         return None
 
-    async def _fetch_article_content(
-        self, session: aiohttp.ClientSession, url: str, headers: dict
+    async def _fetch_article_by_id(
+        self, session: aiohttp.ClientSession, article_id: str, headers: dict
     ) -> str:
-        """获取单篇知乎文章的正文内容。"""
+        """通过文章 ID 获取单篇知乎文章的正文内容。"""
         try:
-            async with session.get(url, headers=headers) as resp:
+            # 使用 zhuanlan API 获取单篇文章
+            api_url = f"https://zhuanlan.zhihu.com/api/posts/{article_id}"
+            async with session.get(api_url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    content = data.get("content", "")
+                    if content:
+                        return content
+
+            # 回退：从文章页面 HTML 提取
+            page_url = f"https://zhuanlan.zhihu.com/p/{article_id}"
+            async with session.get(page_url, headers=headers) as resp:
                 if resp.status != 200:
                     return ""
                 html = await resp.text()
 
-            # 从文章页面提取内容
-            # 方法1: 从 js-initialData 提取
+            # 从 js-initialData 提取
             data_match = re.search(
                 r'<script\s+id="js-initialData"\s+type="text/json">(.*?)</script>',
                 html,
@@ -363,17 +358,8 @@ class DailyAINewsPlugin(Star):
                     if content:
                         return content
 
-            # 方法2: 从 HTML 中直接提取文章正文
-            content_match = re.search(
-                r'class="RichText[^"]*"[^>]*>(.*?)</div>',
-                html,
-                re.DOTALL,
-            )
-            if content_match:
-                return content_match.group(1)
-
         except Exception as e:
-            logger.warning(f"获取文章内容失败 ({url}): {e}")
+            logger.warning(f"获取文章内容失败 (ID: {article_id}): {e}")
 
         return ""
 
