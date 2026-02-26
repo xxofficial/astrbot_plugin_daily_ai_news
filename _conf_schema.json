@@ -11,18 +11,6 @@
 		"hint": "0-59，默认为 0",
 		"default": 0
 	},
-	"news_count": {
-		"type": "int",
-		"description": "每次推送的新闻条数",
-		"hint": "建议 5-20 条，默认为 10",
-		"default": 10
-	},
-	"rss_sources": {
-		"type": "text",
-		"description": "RSS 源地址（每行一个 URL）",
-		"hint": "每行填写一个 RSS 源 URL，留空则使用默认源",
-		"default": ""
-	},
 	"subscribed_groups": {
 		"type": "text",
 		"description": "订阅推送的 QQ 群号（每行一个）",
