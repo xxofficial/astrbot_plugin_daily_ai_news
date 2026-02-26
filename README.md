@@ -1,14 +1,46 @@
-# astrbot-plugin-helloworld
+# astrbot_plugin_daily_ai_news
 
-AstrBot 插件模板 / A template plugin for AstrBot plugin feature
+每日AI资讯自动推送插件 - 为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 开发
 
-> [!NOTE]
-> This repo is just a template of [AstrBot](https://github.com/AstrBotDevs/AstrBot) Plugin.
-> 
-> [AstrBot](https://github.com/AstrBotDevs/AstrBot) is an agentic assistant for both personal and group conversations. It can be deployed across dozens of mainstream instant messaging platforms, including QQ, Telegram, Feishu, DingTalk, Slack, LINE, Discord, Matrix, etc. In addition, it provides a reliable and extensible conversational AI infrastructure for individuals, developers, and teams. Whether you need a personal AI companion, an intelligent customer support agent, an automation assistant, or an enterprise knowledge base, AstrBot enables you to quickly build AI applications directly within your existing messaging workflows.
+每天定时从多个 AI 资讯 RSS 源抓取最新新闻并推送到 QQ 群。
 
-# Supports
+## ✨ 功能
 
-- [AstrBot Repo](https://github.com/AstrBotDevs/AstrBot)
-- [AstrBot Plugin Development Docs (Chinese)](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot Plugin Development Docs (English)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
+- 📰 **每日自动推送**：每天定时（默认早 8:00）自动推送最新 AI 资讯
+- 🔄 **手动获取**：发送 `/ainews` 随时获取最新资讯
+- 📋 **灵活订阅**：支持配置文件填写群号 + 群内指令订阅两种方式
+- ⚙️ **可配置**：推送时间、新闻条数、RSS 源均可在 WebUI 中配置
+- 🔗 **多源聚合**：默认聚合 36氪AI、机器之心、InfoQ、虎嗅、少数派等多个 AI 资讯源
+
+## 📝 指令列表
+
+| 指令             | 说明                     |
+| ---------------- | ------------------------ |
+| `/ainews`        | 立即获取最新 AI 资讯     |
+| `/ainews_sub`    | 订阅每日推送（群内使用） |
+| `/ainews_unsub`  | 取消每日推送订阅         |
+| `/ainews_status` | 查看推送状态             |
+
+## ⚙️ 配置说明
+
+安装插件后，在 AstrBot 管理面板中可配置以下选项：
+
+| 配置项               | 说明             | 默认值     |
+| -------------------- | ---------------- | ---------- |
+| 每日推送时间（小时） | 0-23             | 8          |
+| 每日推送时间（分钟） | 0-59             | 0          |
+| 每次推送新闻条数     | 建议 5-20        | 10         |
+| RSS 源地址           | 每行一个 URL     | 默认内置源 |
+| 订阅群号             | 每行一个 QQ 群号 | 空         |
+
+## 📦 安装
+
+1. 在 AstrBot 管理面板中搜索 `astrbot_plugin_daily_ai_news` 安装
+2. 或手动将本仓库克隆到 `addons/plugins/` 目录下
+3. 重启 AstrBot 即可生效
+
+## 📌 注意事项
+
+- 默认 RSS 源使用 [RSSHub](https://docs.rsshub.app/) 公共实例，如不稳定请自行部署 RSSHub 并更换源地址
+- 配置群号方式需要填写 QQ 群号码（纯数字），指令方式需在群内发送 `/ainews_sub`
+- 两种订阅方式可同时使用，插件会自动合并去重
