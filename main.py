@@ -49,16 +49,22 @@ class DailyAINewsPlugin(Star):
         self._sent_file = os.path.join(
             "data", "astrbot_plugin_daily_ai_news", "sent_news.json"
         )
+        self._cache_file = os.path.join(
+            "data", "astrbot_plugin_daily_ai_news", "summary_cache.json"
+        )
         # 通过指令订阅的 unified_msg_origin 集合
         self._cmd_subscriptions: Set[str] = set()
         # 已经推送过的文章 ID（用于去重）
         self._sent_ids: Set[str] = set()
+        # 按日期缓存的 AI 总结 {"2026-02-26": {"title": ..., "url": ..., "summary": ...}}
+        self._summary_cache: Dict[str, Dict] = {}
 
     async def initialize(self):
         """插件初始化：加载持久化数据，启动定时推送任务。"""
         os.makedirs(os.path.dirname(self._subscriptions_file), exist_ok=True)
         self._load_subscriptions()
         self._load_sent_news()
+        self._load_summary_cache()
         self._task = asyncio.create_task(self._schedule_loop())
         logger.info("每日AI资讯推送插件已初始化（知乎专栏 + AI 总结模式）")
 
@@ -67,19 +73,21 @@ class DailyAINewsPlugin(Star):
     @filter.command("ainews")
     async def cmd_ainews(self, event: AstrMessageEvent):
         """手动获取最新 AI 早报"""
-        yield event.plain_result("🔄 正在获取最新 AI 早报，请稍候...")
-        article = await self._fetch_latest_article()
-        if not article:
-            yield event.plain_result("😞 暂时未能获取到 AI 早报，请稍后再试。")
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # 检查缓存
+        cached = self._summary_cache.get(today)
+        if cached:
+            logger.info(f"使用缓存的 AI 总结 ({today})")
+            text = self._format_summary(cached["title"], cached["url"], cached["summary"])
+            yield event.plain_result(text)
             return
 
-        # 尝试 AI 总结
-        summary = await self._summarize_with_ai(article["content"])
-        if summary:
-            text = self._format_summary(article["title"], article["url"], summary)
-        else:
-            # AI 总结失败，回退到原文摘要
-            text = self._format_fallback(article)
+        yield event.plain_result("🔄 正在获取最新 AI 早报，请稍候...")
+        text = await self._get_or_create_summary(today)
+        if not text:
+            yield event.plain_result("😞 暂时未能获取到 AI 早报，请稍后再试。")
+            return
         yield event.plain_result(text)
 
     @filter.command("ainews_sub")
@@ -168,26 +176,20 @@ class DailyAINewsPlugin(Star):
         """执行一次新闻推送到所有订阅目标。"""
         logger.info("开始执行每日AI资讯推送...")
 
-        article = await self._fetch_latest_article()
-        if not article:
-            logger.warning("未能获取到 AI 早报文章，跳过本次推送")
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        # 检查是否已推送过今天的内容
+        if today in self._sent_ids:
+            logger.info(f"今日 ({today}) 已推送过，跳过")
             return
 
-        # 检查是否已推送过
-        article_id = article.get("id", article["url"])
-        if article_id in self._sent_ids:
-            logger.info(f"文章已推送过: {article['title']}，跳过")
+        text = await self._get_or_create_summary(today)
+        if not text:
+            logger.warning("未能获取到 AI 早报，跳过本次推送")
             return
-
-        # AI 总结
-        summary = await self._summarize_with_ai(article["content"])
-        if summary:
-            text = self._format_summary(article["title"], article["url"], summary)
-        else:
-            text = self._format_fallback(article)
 
         # 记录已推送
-        self._sent_ids.add(article_id)
+        self._sent_ids.add(today)
         if len(self._sent_ids) > 200:
             self._sent_ids = set(list(self._sent_ids)[-100:])
         self._save_sent_news()
@@ -207,6 +209,32 @@ class DailyAINewsPlugin(Star):
                 logger.error(f"推送到 {umo} 失败: {e}")
 
         logger.info(f"每日AI资讯推送完成，已推送到 {len(targets)} 个目标")
+
+    async def _get_or_create_summary(self, date_str: str) -> Optional[str]:
+        """获取指定日期的 AI 总结，优先使用缓存。"""
+        # 检查缓存
+        cached = self._summary_cache.get(date_str)
+        if cached:
+            logger.info(f"使用缓存的 AI 总结 ({date_str})")
+            return self._format_summary(cached["title"], cached["url"], cached["summary"])
+
+        # 缓存未命中，获取文章并总结
+        article = await self._fetch_latest_article()
+        if not article:
+            return None
+
+        summary = await self._summarize_with_ai(article["content"])
+        if summary:
+            # 写入缓存
+            self._summary_cache[date_str] = {
+                "title": article["title"],
+                "url": article["url"],
+                "summary": summary,
+            }
+            self._save_summary_cache()
+            return self._format_summary(article["title"], article["url"], summary)
+        else:
+            return self._format_fallback(article)
 
     # ==================== 知乎专栏抓取 ====================
 
@@ -529,6 +557,35 @@ class DailyAINewsPlugin(Star):
                 )
         except Exception as e:
             logger.error(f"保存已推送记录失败: {e}")
+
+    def _load_summary_cache(self):
+        """加载 AI 总结缓存。"""
+        try:
+            if os.path.exists(self._cache_file):
+                with open(self._cache_file, "r", encoding="utf-8") as f:
+                    self._summary_cache = json.load(f)
+                # 清理 7 天前的缓存
+                cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+                self._summary_cache = {
+                    k: v for k, v in self._summary_cache.items() if k >= cutoff
+                }
+                logger.info(f"已加载 {len(self._summary_cache)} 条总结缓存")
+        except Exception as e:
+            logger.error(f"加载总结缓存失败: {e}")
+            self._summary_cache = {}
+
+    def _save_summary_cache(self):
+        """保存 AI 总结缓存。"""
+        try:
+            with open(self._cache_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    self._summary_cache,
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+        except Exception as e:
+            logger.error(f"保存总结缓存失败: {e}")
 
     async def terminate(self):
         """插件卸载时取消定时任务。"""
