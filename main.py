@@ -15,11 +15,11 @@ from astrbot.api import logger
 
 # 默认 RSS 源列表
 DEFAULT_RSS_SOURCES = [
-    "https://rsshub.app/36kr/motif/ai",            # 36氪 AI 频道
-    "https://rsshub.app/jiqizhixin/daily",          # 机器之心
-    "https://rsshub.app/infoq/recommend",           # InfoQ 推荐
-    "https://rsshub.app/huxiu/tag/14",              # 虎嗅 人工智能
-    "https://rsshub.app/sspai/tag/AI",              # 少数派 AI
+    "https://sspai.com/feed",                                               # 少数派
+    "https://www.huxiu.com/rss/0.xml",                                      # 虎嗅
+    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",     # The Verge AI
+    "https://feeds.feedburner.com/venturebeat/SZYF",                        # VentureBeat
+    "https://www.marktechpost.com/feed/",                                   # MarkTechPost AI
 ]
 
 
