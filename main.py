@@ -107,6 +107,8 @@ class DailyAINewsPlugin(Star):
         cmd_sub_count = len(self._cmd_subscriptions)
         cfg_groups = self._get_config_groups()
         cfg_group_count = len(cfg_groups)
+        cfg_users = self._get_config_users()
+        cfg_user_count = len(cfg_users)
 
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
@@ -114,6 +116,7 @@ class DailyAINewsPlugin(Star):
             f"📰 每次推送：{count} 条\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
             f"📋 配置群号数：{cfg_group_count}\n"
+            f"📋 配置私聊数：{cfg_user_count}\n"
             f"📚 已推送新闻缓存：{len(self._sent_urls)} 条"
         )
         yield event.plain_result(status_text)
@@ -362,19 +365,31 @@ class DailyAINewsPlugin(Star):
             return []
         return [g.strip() for g in groups_text.strip().split("\n") if g.strip()]
 
+    def _get_config_users(self) -> List[str]:
+        """从配置中获取手动填写的私聊 QQ 号列表。"""
+        config = self.context.get_config()
+        users_text = config.get("subscribed_users", "")
+        if not users_text or not users_text.strip():
+            return []
+        return [u.strip() for u in users_text.strip().split("\n") if u.strip()]
+
     def _get_all_targets(self) -> Set[str]:
         """
         获取所有推送目标的 unified_msg_origin。
-        合并指令订阅和配置群号两种来源。
+        合并指令订阅、配置群号、配置私聊三种来源。
         """
         targets = set(self._cmd_subscriptions)
 
         # 将配置中的群号转换为 unified_msg_origin 格式
-        # AstrBot 中 QQ 群的 unified_msg_origin 格式通常为:
-        # "aiocqhttp:GroupMessage:<group_id>"
         cfg_groups = self._get_config_groups()
         for group_id in cfg_groups:
             umo = f"aiocqhttp:GroupMessage:{group_id}"
+            targets.add(umo)
+
+        # 将配置中的私聊 QQ 号转换为 unified_msg_origin 格式
+        cfg_users = self._get_config_users()
+        for user_id in cfg_users:
+            umo = f"aiocqhttp:FriendMessage:{user_id}"
             targets.add(umo)
 
         return targets

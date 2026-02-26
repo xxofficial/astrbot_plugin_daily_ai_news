@@ -28,5 +28,11 @@
 		"description": "订阅推送的 QQ 群号（每行一个）",
 		"hint": "手动填写需要推送的 QQ 群号，每行一个。也可通过群内发送 /ainews_sub 指令来订阅。",
 		"default": ""
+	},
+	"subscribed_users": {
+		"type": "text",
+		"description": "订阅推送的 QQ 号（私聊，每行一个）",
+		"hint": "手动填写需要私聊推送的 QQ 号，每行一个。也可通过私聊发送 /ainews_sub 指令来订阅。",
+		"default": ""
 	}
 }
