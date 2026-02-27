@@ -56,15 +56,14 @@ class DailyAINewsPlugin(Star):
         self._cmd_subscriptions: Set[str] = set()
         # 已经推送过的文章 ID（用于去重）
         self._sent_ids: Set[str] = set()
-        # 按日期缓存的 AI 总结 {"2026-02-26": {"title": ..., "url": ..., "summary": ...}}
-        self._summary_cache: Dict[str, Dict] = {}
+
 
     async def initialize(self):
         """插件初始化：加载持久化数据，启动定时推送任务。"""
         os.makedirs(os.path.dirname(self._subscriptions_file), exist_ok=True)
         self._load_subscriptions()
         self._load_sent_news()
-        self._load_summary_cache()
+
         self._task = asyncio.create_task(self._schedule_loop())
         logger.info("每日AI资讯推送插件已初始化（知乎专栏 + AI 总结模式）")
 
@@ -76,7 +75,8 @@ class DailyAINewsPlugin(Star):
         today = datetime.now().strftime("%Y-%m-%d")
 
         # 检查缓存
-        cached = self._summary_cache.get(today)
+        cache = self._read_summary_cache()
+        cached = cache.get(today)
         if cached:
             logger.info(f"使用缓存的 AI 总结 ({today})")
             text = self._format_summary(cached["title"], cached["url"], cached["summary"])
@@ -213,7 +213,8 @@ class DailyAINewsPlugin(Star):
     async def _get_or_create_summary(self, date_str: str) -> Optional[str]:
         """获取指定日期的 AI 总结，优先使用缓存。"""
         # 检查缓存
-        cached = self._summary_cache.get(date_str)
+        cache = self._read_summary_cache()
+        cached = cache.get(date_str)
         if cached:
             logger.info(f"使用缓存的 AI 总结 ({date_str})")
             return self._format_summary(cached["title"], cached["url"], cached["summary"])
@@ -226,12 +227,13 @@ class DailyAINewsPlugin(Star):
         summary = await self._summarize_with_ai(article["content"])
         if summary:
             # 写入缓存
-            self._summary_cache[date_str] = {
+            cache = self._read_summary_cache()
+            cache[date_str] = {
                 "title": article["title"],
                 "url": article["url"],
                 "summary": summary,
             }
-            self._save_summary_cache()
+            self._save_summary_cache(cache)
             return self._format_summary(article["title"], article["url"], summary)
         else:
             return self._format_fallback(article)
@@ -558,28 +560,28 @@ class DailyAINewsPlugin(Star):
         except Exception as e:
             logger.error(f"保存已推送记录失败: {e}")
 
-    def _load_summary_cache(self):
-        """加载 AI 总结缓存。"""
+    def _read_summary_cache(self) -> Dict[str, Dict]:
+        """每次从文件读取 AI 总结缓存，不使用内存变量。"""
         try:
             if os.path.exists(self._cache_file):
                 with open(self._cache_file, "r", encoding="utf-8") as f:
-                    self._summary_cache = json.load(f)
+                    cache = json.load(f)
                 # 清理 7 天前的缓存
                 cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-                self._summary_cache = {
-                    k: v for k, v in self._summary_cache.items() if k >= cutoff
+                cache = {
+                    k: v for k, v in cache.items() if k >= cutoff
                 }
-                logger.info(f"已加载 {len(self._summary_cache)} 条总结缓存")
+                return cache
         except Exception as e:
-            logger.error(f"加载总结缓存失败: {e}")
-            self._summary_cache = {}
+            logger.error(f"读取总结缓存失败: {e}")
+        return {}
 
-    def _save_summary_cache(self):
-        """保存 AI 总结缓存。"""
+    def _save_summary_cache(self, cache: Dict[str, Dict]):
+        """保存 AI 总结缓存到文件。"""
         try:
             with open(self._cache_file, "w", encoding="utf-8") as f:
                 json.dump(
-                    self._summary_cache,
+                    cache,
                     f,
                     ensure_ascii=False,
                     indent=2,
