@@ -565,13 +565,7 @@ class DailyAINewsPlugin(Star):
         try:
             if os.path.exists(self._cache_file):
                 with open(self._cache_file, "r", encoding="utf-8") as f:
-                    cache = json.load(f)
-                # 清理 7 天前的缓存
-                cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-                cache = {
-                    k: v for k, v in cache.items() if k >= cutoff
-                }
-                return cache
+                    return json.load(f)
         except Exception as e:
             logger.error(f"读取总结缓存失败: {e}")
         return {}
@@ -579,6 +573,10 @@ class DailyAINewsPlugin(Star):
     def _save_summary_cache(self, cache: Dict[str, Dict]):
         """保存 AI 总结缓存到文件。"""
         try:
+            # 仅保留最近 10 条缓存
+            if len(cache) > 10:
+                sorted_keys = sorted(cache.keys())
+                cache = {k: cache[k] for k in sorted_keys[-10:]}
             with open(self._cache_file, "w", encoding="utf-8") as f:
                 json.dump(
                     cache,
