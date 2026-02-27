@@ -142,7 +142,12 @@ class DailyAINewsPlugin(Star):
     # ==================== 定时推送 ====================
 
     async def _schedule_loop(self):
-        """后台定时循环，每天在设定时间推送新闻。"""
+        """后台定时循环，每天在设定时间推送新闻。
+        
+        每 60 秒重新读取配置，确保修改 push_hour/push_minute 后
+        无需重启即可生效。
+        """
+        last_logged_target = None  # 用于避免重复打印相同的日志
         while True:
             try:
                 config = self.context.get_config()
@@ -156,14 +161,26 @@ class DailyAINewsPlugin(Star):
                 if target <= now:
                     target += timedelta(days=1)
 
-                wait_seconds = (target - now).total_seconds()
-                logger.info(
-                    f"下次推送时间：{target.strftime('%Y-%m-%d %H:%M')}，"
-                    f"等待 {wait_seconds:.0f} 秒"
-                )
+                # 仅在目标时间变化时打印日志，避免每分钟刷屏
+                target_str = target.strftime('%Y-%m-%d %H:%M')
+                if target_str != last_logged_target:
+                    wait_seconds = (target - now).total_seconds()
+                    logger.info(
+                        f"下次推送时间：{target_str}，"
+                        f"等待 {wait_seconds:.0f} 秒"
+                    )
+                    last_logged_target = target_str
 
-                await asyncio.sleep(wait_seconds)
-                await self._do_push()
+                # 检查是否到达推送时间（1分钟窗口内）
+                diff = (target - now).total_seconds()
+                if diff <= 0:
+                    await self._do_push()
+                    # 推送完成后等待 120 秒，避免同一分钟内重复触发
+                    await asyncio.sleep(120)
+                    last_logged_target = None
+                else:
+                    # 每 60 秒重新检查配置，使配置变更及时生效
+                    await asyncio.sleep(min(60, diff))
 
             except asyncio.CancelledError:
                 logger.info("定时推送任务已取消")
