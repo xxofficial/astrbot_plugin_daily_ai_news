@@ -44,6 +44,9 @@ class DailyAINewsPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        logger.info("打印config")
+        for key, value in self.config.items():
+            logger.info(f"{key}: {value}")
         self._task: asyncio.Task = None
         self._subscriptions_file = os.path.join(
             "data", "astrbot_plugin_daily_ai_news", "subscriptions.json"
@@ -60,6 +63,7 @@ class DailyAINewsPlugin(Star):
         self._sent_ids: Set[str] = set()
         # 按日期缓存的 AI 总结 {"2026-02-26": {"title": ..., "url": ..., "summary": ...}}
         self._summary_cache: Dict[str, Dict] = {}
+
 
     async def initialize(self):
         """插件初始化：加载持久化数据，启动定时推送任务。"""
