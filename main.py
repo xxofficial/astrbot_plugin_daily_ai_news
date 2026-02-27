@@ -73,6 +73,7 @@ class DailyAINewsPlugin(Star):
         self._load_summary_cache()
         self._task = asyncio.create_task(self._schedule_loop())
         logger.info("每日AI资讯推送插件已初始化（知乎专栏 + AI 总结模式）")
+        logger.info("打印config")
         for key, value in self.config.items():
             logger.info(f"{key}: {value}")
 
