@@ -83,20 +83,17 @@ class DailyAINewsPlugin(Star):
     @filter.command("ainews")
     async def cmd_ainews(self, event: AstrMessageEvent):
         """手动获取最新 AI 早报"""
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # 检查缓存
-        cached = self._summary_cache.get(today)
-        if cached:
-            logger.info(f"使用缓存的 AI 总结 ({today})")
-            text = self._format_summary(cached["title"], cached["url"], cached["summary"])
-            yield event.plain_result(text)
-            return
-
         yield event.plain_result("🔄 正在获取最新 AI 早报，请稍候...")
-        text = await self._get_or_create_summary(today)
-        if not text:
+        article = await self._fetch_latest_article()
+        if not article:
             yield event.plain_result("😞 暂时未能获取到 AI 早报，请稍后再试。")
+            return
+            
+        article_date = self._extract_date_from_title(article["title"], article.get("created", 0))
+        text = await self._get_or_create_summary(article, article_date)
+        
+        if not text:
+            yield event.plain_result("😞 暂时未能提取到有效总结，请稍后再试。")
             return
         yield event.plain_result(text)
 
@@ -202,20 +199,25 @@ class DailyAINewsPlugin(Star):
         """执行一次新闻推送到所有订阅目标。"""
         logger.info("开始执行每日AI资讯推送...")
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        article = await self._fetch_latest_article()
+        if not article:
+            logger.warning("未能获取到最新 AI 早报，跳过本次推送")
+            return
+            
+        article_date = self._extract_date_from_title(article["title"], article.get("created", 0))
 
-        # 检查是否已推送过今天的内容
-        if today in self._sent_ids:
-            logger.info(f"今日 ({today}) 已推送过，跳过")
+        # 检查是否已推送过这篇内容
+        if article_date in self._sent_ids:
+            logger.info(f"该日期早报 ({article_date}) 已推送过，跳过")
             return
 
-        text = await self._get_or_create_summary(today)
+        text = await self._get_or_create_summary(article, article_date)
         if not text:
-            logger.warning("未能获取到 AI 早报，跳过本次推送")
+            logger.warning("未能生成 AI 早报总结，跳过本次推送")
             return
 
         # 记录已推送
-        self._sent_ids.add(today)
+        self._sent_ids.add(article_date)
         if len(self._sent_ids) > 200:
             self._sent_ids = set(list(self._sent_ids)[-100:])
         self._save_sent_news()
@@ -236,23 +238,19 @@ class DailyAINewsPlugin(Star):
 
         logger.info(f"每日AI资讯推送完成，已推送到 {len(targets)} 个目标")
 
-    async def _get_or_create_summary(self, date_str: str) -> Optional[str]:
-        """获取指定日期的 AI 总结，优先使用缓存。"""
+    async def _get_or_create_summary(self, article: Dict, article_date: str) -> Optional[str]:
+        """获取指定文章的 AI 总结，优先使用缓存。"""
         # 检查缓存
-        cached = self._summary_cache.get(date_str)
+        cached = self._summary_cache.get(article_date)
         if cached:
-            logger.info(f"使用缓存的 AI 总结 ({date_str})")
+            logger.info(f"使用缓存的 AI 总结 ({article_date})")
             return self._format_summary(cached["title"], cached["url"], cached["summary"])
 
-        # 缓存未命中，获取文章并总结
-        article = await self._fetch_latest_article()
-        if not article:
-            return None
-
+        # 缓存未命中，进行 AI 总结
         summary = await self._summarize_with_ai(article["content"])
         if summary:
             # 写入缓存
-            self._summary_cache[date_str] = {
+            self._summary_cache[article_date] = {
                 "title": article["title"],
                 "url": article["url"],
                 "summary": summary,
@@ -489,6 +487,28 @@ class DailyAINewsPlugin(Star):
 
     # ==================== 工具方法 ====================
 
+    def _extract_date_from_title(self, title: str, fallback_ts: int) -> str:
+        """从文章标题中提取日期作为缓存和推送的标识。"""
+        # 尝试匹配 2024年3月12日, 03月12日, 3月12日等格式
+        m = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', title)
+        if m:
+            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        
+        m = re.search(r'(\d{1,2})月(\d{1,2})日', title)
+        if m:
+            year = datetime.fromtimestamp(fallback_ts).year if fallback_ts else datetime.now().year
+            return f"{year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+            
+        m = re.search(r'(\d{4})[./-](\d{1,2})[./-](\d{1,2})', title)
+        if m:
+            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+            
+        # 如果提取失败，直接使用文章的创建时间
+        if fallback_ts:
+            return datetime.fromtimestamp(fallback_ts).strftime("%Y-%m-%d")
+            
+        return datetime.now().strftime("%Y-%m-%d")
+
     def _clean_html(self, text: str) -> str:
         """去除 HTML 标签，转为纯文本。"""
         if not text:
@@ -588,11 +608,10 @@ class DailyAINewsPlugin(Star):
             if os.path.exists(self._cache_file):
                 with open(self._cache_file, "r", encoding="utf-8") as f:
                     self._summary_cache = json.load(f)
-                # 清理 7 天前的缓存
-                cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-                self._summary_cache = {
-                    k: v for k, v in self._summary_cache.items() if k >= cutoff
-                }
+                # 仅保留最近 10 条缓存
+                if len(self._summary_cache) > 10:
+                    sorted_keys = sorted(self._summary_cache.keys())
+                    self._summary_cache = {k: self._summary_cache[k] for k in sorted_keys[-10:]}
                 logger.info(f"已加载 {len(self._summary_cache)} 条总结缓存")
         except Exception as e:
             logger.error(f"加载总结缓存失败: {e}")
@@ -601,6 +620,11 @@ class DailyAINewsPlugin(Star):
     def _save_summary_cache(self):
         """保存 AI 总结缓存。"""
         try:
+            # 仅保存最近 10 条缓存
+            if len(self._summary_cache) > 10:
+                sorted_keys = sorted(self._summary_cache.keys())
+                self._summary_cache = {k: self._summary_cache[k] for k in sorted_keys[-10:]}
+
             with open(self._cache_file, "w", encoding="utf-8") as f:
                 json.dump(
                     self._summary_cache,
