@@ -12,6 +12,7 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.event import MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+from astrbot.api import AstrBotConfig
 
 # 知乎专栏配置
 ZHIHU_COLUMN_ID = "c_1885342192987509163"  # 橘鸦的 AI 日志
@@ -40,8 +41,9 @@ SUMMARY_PROMPT = """你是一个专业的 AI 资讯编辑。请将以下 AI 早�
     "https://github.com/YourName/astrbot_plugin_daily_ai_news",
 )
 class DailyAINewsPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
         self._task: asyncio.Task = None
         self._subscriptions_file = os.path.join(
             "data", "astrbot_plugin_daily_ai_news", "subscriptions.json"
@@ -118,7 +120,7 @@ class DailyAINewsPlugin(Star):
     @filter.command("ainews_status")
     async def cmd_status(self, event: AstrMessageEvent):
         """查看推送状态"""
-        config = self.context.get_config()
+        config = self.config
         hour = config.get("push_hour", 8)
         minute = config.get("push_minute", 0)
         cmd_sub_count = len(self._cmd_subscriptions)
@@ -150,9 +152,8 @@ class DailyAINewsPlugin(Star):
         last_logged_target = None  # 用于避免重复打印相同的日志
         while True:
             try:
-                config = self.context.get_config()
-                target_hour = config.get("push_hour", 8)
-                target_minute = config.get("push_minute", 0)
+                target_hour = self.config.get("push_hour", 8)
+                target_minute = self.config.get("push_minute", 0)
 
                 now = datetime.now()
                 target = now.replace(
@@ -493,16 +494,14 @@ class DailyAINewsPlugin(Star):
 
     def _get_config_groups(self) -> List[str]:
         """从配置中获取手动填写的 QQ 群号列表。"""
-        config = self.context.get_config()
-        groups_text = config.get("subscribed_groups", "")
+        groups_text = self.config.get("subscribed_groups", "")
         if not groups_text or not groups_text.strip():
             return []
         return [g.strip() for g in groups_text.strip().split("\n") if g.strip()]
 
     def _get_config_users(self) -> List[str]:
         """从配置中获取手动填写的私聊 QQ 号列表。"""
-        config = self.context.get_config()
-        users_text = config.get("subscribed_users", "")
+        users_text = self.config.get("subscribed_users", "")
         if not users_text or not users_text.strip():
             return []
         return [u.strip() for u in users_text.strip().split("\n") if u.strip()]
