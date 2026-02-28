@@ -11,6 +11,12 @@
 		"hint": "0-59，默认为 0",
 		"default": 0
 	},
+	"rss_poll_interval": {
+		"type": "int",
+		"description": "RSS 轮询间隔（秒）",
+		"hint": "当 RSS 尚未更新当日内容时，每隔多少秒重新检查一次，默认 600 秒（10分钟）",
+		"default": 600
+	},
 	"subscribed_groups": {
 		"type": "text",
 		"description": "订阅推送的 QQ 群号（每行一个）",

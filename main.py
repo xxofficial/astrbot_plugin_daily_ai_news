@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import List, Dict, Set, Optional
 
@@ -13,10 +14,8 @@ from astrbot.api.event import MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-# 知乎专栏配置
-ZHIHU_COLUMN_ID = "c_1885342192987509163"  # 橘鸦的 AI 日志
-ZHIHU_COLUMN_API = f"https://www.zhihu.com/api/v4/columns/{ZHIHU_COLUMN_ID}/items"
-ZHIHU_ARTICLE_KEYWORD = "早报"  # 筛选标题含此关键词的文章
+# RSS 订阅源配置
+RSS_URL = "https://imjuya.github.io/juya-ai-daily/rss.xml"
 
 # AI 总结 prompt
 SUMMARY_PROMPT = """你是一个专业的 AI 资讯编辑。请将以下 AI 早报内容进行精炼总结，要求：
@@ -35,8 +34,8 @@ SUMMARY_PROMPT = """你是一个专业的 AI 资讯编辑。请将以下 AI 早�
 @register(
     "astrbot_plugin_daily_ai_news",
     "YourName",
-    "每日AI资讯自动推送插件，抓取知乎 AI 早报并通过 AI 总结后推送",
-    "2.0.0",
+    "每日AI资讯自动推送插件，通过 RSS 订阅获取 AI 早报并经 AI 总结后推送",
+    "3.0.0",
     "https://github.com/YourName/astrbot_plugin_daily_ai_news",
 )
 class DailyAINewsPlugin(Star):
@@ -65,7 +64,7 @@ class DailyAINewsPlugin(Star):
         self._load_sent_news()
 
         self._task = asyncio.create_task(self._schedule_loop())
-        logger.info("每日AI资讯推送插件已初始化（知乎专栏 + AI 总结模式）")
+        logger.info("每日AI资讯推送插件已初始化（RSS 订阅 + AI 总结模式）")
 
     # ==================== 指令处理 ====================
 
@@ -79,14 +78,21 @@ class DailyAINewsPlugin(Star):
         cached = cache.get(today)
         if cached:
             logger.info(f"使用缓存的 AI 总结 ({today})")
-            text = self._format_summary(cached["title"], cached["url"], cached["summary"])
+            text = self._format_summary(
+                cached["title"], cached["url"], cached["summary"]
+            )
             yield event.plain_result(text)
             return
 
-        yield event.plain_result("🔄 正在获取最新 AI 早报，请稍候...")
-        text = await self._get_or_create_summary(today)
-        if not text:
+        yield event.plain_result("🔄 正在从 RSS 获取最新 AI 早报，请稍候...")
+        article = await self._fetch_rss_latest()
+        if not article:
             yield event.plain_result("😞 暂时未能获取到 AI 早报，请稍后再试。")
+            return
+
+        text = await self._get_or_create_summary(article, today)
+        if not text:
+            yield event.plain_result("😞 AI 总结失败，请稍后再试。")
             return
         yield event.plain_result(text)
 
@@ -121,6 +127,7 @@ class DailyAINewsPlugin(Star):
         config = self.context.get_config()
         hour = config.get("push_hour", 8)
         minute = config.get("push_minute", 0)
+        poll_interval = config.get("rss_poll_interval", 600)
         cmd_sub_count = len(self._cmd_subscriptions)
         cfg_groups = self._get_config_groups()
         cfg_group_count = len(cfg_groups)
@@ -129,8 +136,9 @@ class DailyAINewsPlugin(Star):
 
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
-            f"📡 数据源：知乎专栏「橘鸦的 AI 日志」\n"
-            f"⏰ 推送时间：每天 {hour:02d}:{minute:02d}\n"
+            f"📡 数据源：RSS 订阅（橘鸦 AI 日报）\n"
+            f"⏰ 首次检查时间：每天 {hour:02d}:{minute:02d}\n"
+            f"🔄 轮询间隔：{poll_interval} 秒\n"
             f"🤖 AI 总结：已启用\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
             f"📋 配置群号数：{cfg_group_count}\n"
@@ -139,15 +147,16 @@ class DailyAINewsPlugin(Star):
         )
         yield event.plain_result(status_text)
 
-    # ==================== 定时推送 ====================
+    # ==================== 定时 + 轮询推送 ====================
 
     async def _schedule_loop(self):
-        """后台定时循环，每天在设定时间推送新闻。"""
+        """后台定时循环：每天在设定时间首次检查 RSS，若未更新则轮询直到获取到当日文章。"""
         while True:
             try:
                 config = self.context.get_config()
                 target_hour = config.get("push_hour", 8)
                 target_minute = config.get("push_minute", 0)
+                poll_interval = config.get("rss_poll_interval", 600)
 
                 now = datetime.now()
                 target = now.replace(
@@ -158,12 +167,42 @@ class DailyAINewsPlugin(Star):
 
                 wait_seconds = (target - now).total_seconds()
                 logger.info(
-                    f"下次推送时间：{target.strftime('%Y-%m-%d %H:%M')}，"
+                    f"下次 RSS 检查时间：{target.strftime('%Y-%m-%d %H:%M')}，"
                     f"等待 {wait_seconds:.0f} 秒"
                 )
 
                 await asyncio.sleep(wait_seconds)
-                await self._do_push()
+
+                # 到达设定时间，开始检查 RSS 并尝试推送
+                today = datetime.now().strftime("%Y-%m-%d")
+
+                # 检查今天是否已经推送过
+                if today in self._sent_ids:
+                    logger.info(f"今日 ({today}) 已推送过，等待明天")
+                    continue
+
+                # 首次尝试获取 RSS
+                pushed = await self._try_fetch_and_push(today)
+                if pushed:
+                    continue
+
+                # RSS 尚未更新，进入轮询模式
+                logger.info(
+                    f"RSS 尚未更新当日 ({today}) 内容，"
+                    f"进入轮询模式（间隔 {poll_interval} 秒）"
+                )
+                while True:
+                    await asyncio.sleep(poll_interval)
+
+                    # 如果已经过了当天，停止轮询
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    if current_date != today:
+                        logger.info("已过当天，停止轮询，等待明天定时触发")
+                        break
+
+                    pushed = await self._try_fetch_and_push(today)
+                    if pushed:
+                        break
 
             except asyncio.CancelledError:
                 logger.info("定时推送任务已取消")
@@ -172,24 +211,46 @@ class DailyAINewsPlugin(Star):
                 logger.error(f"定时推送任务出错: {e}")
                 await asyncio.sleep(60)
 
-    async def _do_push(self):
+    async def _try_fetch_and_push(self, today: str) -> bool:
+        """尝试从 RSS 获取当日文章并推送。返回 True 表示成功推送。"""
+        try:
+            article = await self._fetch_rss_latest()
+            if not article:
+                logger.info("RSS 获取失败或无文章")
+                return False
+
+            # 检查是否是当日文章
+            if not self._is_today_article(article["title"], today):
+                logger.info(
+                    f"RSS 最新文章不是今日内容：{article['title']}，继续等待"
+                )
+                return False
+
+            # 检查是否已推送过该文章（基于链接去重）
+            if article["link"] in self._sent_ids:
+                logger.info(f"该文章已推送过：{article['link']}")
+                return False
+
+            # 获取 AI 总结并推送
+            await self._do_push(article, today)
+            return True
+
+        except Exception as e:
+            logger.error(f"尝试获取并推送失败: {e}")
+            return False
+
+    async def _do_push(self, article: Dict, today: str):
         """执行一次新闻推送到所有订阅目标。"""
-        logger.info("开始执行每日AI资讯推送...")
+        logger.info(f"开始执行每日AI资讯推送: {article['title']}")
 
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # 检查是否已推送过今天的内容
-        if today in self._sent_ids:
-            logger.info(f"今日 ({today}) 已推送过，跳过")
-            return
-
-        text = await self._get_or_create_summary(today)
+        text = await self._get_or_create_summary(article, today)
         if not text:
-            logger.warning("未能获取到 AI 早报，跳过本次推送")
+            logger.warning("未能生成 AI 总结，跳过本次推送")
             return
 
-        # 记录已推送
+        # 记录已推送（同时记录日期和链接，双重去重）
         self._sent_ids.add(today)
+        self._sent_ids.add(article["link"])
         if len(self._sent_ids) > 200:
             self._sent_ids = set(list(self._sent_ids)[-100:])
         self._save_sent_news()
@@ -210,188 +271,96 @@ class DailyAINewsPlugin(Star):
 
         logger.info(f"每日AI资讯推送完成，已推送到 {len(targets)} 个目标")
 
-    async def _get_or_create_summary(self, date_str: str) -> Optional[str]:
+    async def _get_or_create_summary(
+        self, article: Dict, date_str: str
+    ) -> Optional[str]:
         """获取指定日期的 AI 总结，优先使用缓存。"""
         # 检查缓存
         cache = self._read_summary_cache()
         cached = cache.get(date_str)
         if cached:
             logger.info(f"使用缓存的 AI 总结 ({date_str})")
-            return self._format_summary(cached["title"], cached["url"], cached["summary"])
+            return self._format_summary(
+                cached["title"], cached["url"], cached["summary"]
+            )
 
-        # 缓存未命中，获取文章并总结
-        article = await self._fetch_latest_article()
-        if not article:
-            return None
-
+        # 缓存未命中，进行 AI 总结
         summary = await self._summarize_with_ai(article["content"])
         if summary:
             # 写入缓存
             cache = self._read_summary_cache()
             cache[date_str] = {
                 "title": article["title"],
-                "url": article["url"],
+                "url": article["link"],
                 "summary": summary,
             }
             self._save_summary_cache(cache)
-            return self._format_summary(article["title"], article["url"], summary)
+            return self._format_summary(article["title"], article["link"], summary)
         else:
             return self._format_fallback(article)
 
-    # ==================== 知乎专栏抓取 ====================
+    # ==================== RSS 获取 ====================
 
-    async def _fetch_latest_article(self) -> Optional[Dict]:
-        """从知乎专栏获取最新的 AI 早报文章。"""
+    async def _fetch_rss_latest(self) -> Optional[Dict]:
+        """从 RSS 订阅源获取最新一篇文章。"""
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "https://www.zhihu.com/",
-                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (compatible; AstrBot/3.0; +https://github.com/AstrBot)",
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
             }
 
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as session:
-                # 尝试使用知乎专栏 API
-                article = await self._fetch_from_column_api(session, headers)
-                if article:
-                    return article
+                async with session.get(RSS_URL, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"RSS 请求返回状态码 {resp.status}")
+                        return None
 
-                # API 失败，尝试从专栏页面HTML抓取
-                logger.warning("知乎专栏 API 获取失败，尝试从页面获取...")
-                article = await self._fetch_from_column_page(session, headers)
-                if article:
-                    return article
+                    xml_text = await resp.text()
 
+            # 解析 RSS XML
+            root = ET.fromstring(xml_text)
+            channel = root.find("channel")
+            if channel is None:
+                logger.warning("RSS XML 中未找到 channel 元素")
+                return None
+
+            # 获取第一个 item（最新文章）
+            item = channel.find("item")
+            if item is None:
+                logger.warning("RSS 中没有任何文章")
+                return None
+
+            title = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            description = item.findtext("description", "").strip()
+
+            if not title:
+                logger.warning("RSS 文章标题为空")
+                return None
+
+            # 清理 HTML（description 可能包含 HTML 标签）
+            content = self._clean_html(description)
+
+            logger.info(f"RSS 获取到最新文章：{title}")
+            return {
+                "title": title,
+                "link": link,
+                "content": content,
+            }
+
+        except ET.ParseError as e:
+            logger.error(f"RSS XML 解析失败: {e}")
         except Exception as e:
-            logger.error(f"获取知乎专栏文章失败: {e}")
+            logger.error(f"RSS 获取失败: {e}")
 
         return None
 
-    async def _fetch_from_column_api(
-        self, session: aiohttp.ClientSession, headers: dict
-    ) -> Optional[Dict]:
-        """通过知乎 v4 API 获取专栏文章列表。"""
-        try:
-            url = f"{ZHIHU_COLUMN_API}?limit=10&offset=0"
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning(f"知乎专栏 API 返回状态码 {resp.status}")
-                    return None
-
-                data = await resp.json()
-
-                # v4 API 返回格式: {"data": [...], "paging": {...}}
-                articles = data.get("data", [])
-
-                for item in articles:
-                    title = item.get("title", "")
-                    if ZHIHU_ARTICLE_KEYWORD in title:
-                        article_id = str(item.get("id", ""))
-                        content = item.get("content", "")
-                        if not content:
-                            # 如果 API 没返回全文，通过文章 API 获取
-                            content = await self._fetch_article_by_id(
-                                session, article_id, headers
-                            )
-
-                        return {
-                            "id": article_id,
-                            "title": title,
-                            "url": f"https://zhuanlan.zhihu.com/p/{article_id}",
-                            "content": self._clean_html(content),
-                            "created": item.get("created", 0),
-                        }
-
-        except Exception as e:
-            logger.warning(f"知乎专栏 API 请求异常: {e}")
-
-        return None
-
-    async def _fetch_from_column_page(
-        self, session: aiohttp.ClientSession, headers: dict
-    ) -> Optional[Dict]:
-        """回退方案：通过旧版专栏 API 获取文章列表。"""
-        try:
-            # 尝试旧版 zhuanlan API
-            old_api_url = f"https://zhuanlan.zhihu.com/api/columns/{ZHIHU_COLUMN_ID}/articles?limit=10&offset=0"
-            async with session.get(old_api_url, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning(f"知乎旧版 API 返回状态码 {resp.status}")
-                    return None
-
-                data = await resp.json()
-
-                # 旧版 API 可能直接返回列表或 {"data": [...]}
-                articles = data if isinstance(data, list) else data.get("data", [])
-
-                for item in articles:
-                    title = item.get("title", "")
-                    if ZHIHU_ARTICLE_KEYWORD in title:
-                        article_id = str(item.get("id", ""))
-                        content = item.get("content", "")
-
-                        if not content:
-                            content = await self._fetch_article_by_id(
-                                session, article_id, headers
-                            )
-
-                        return {
-                            "id": article_id,
-                            "title": title,
-                            "url": f"https://zhuanlan.zhihu.com/p/{article_id}",
-                            "content": self._clean_html(content),
-                            "created": item.get("created", 0),
-                        }
-
-        except Exception as e:
-            logger.warning(f"知乎旧版 API 请求异常: {e}")
-
-        return None
-
-    async def _fetch_article_by_id(
-        self, session: aiohttp.ClientSession, article_id: str, headers: dict
-    ) -> str:
-        """通过文章 ID 获取单篇知乎文章的正文内容。"""
-        try:
-            # 使用 zhuanlan API 获取单篇文章
-            api_url = f"https://zhuanlan.zhihu.com/api/posts/{article_id}"
-            async with session.get(api_url, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    content = data.get("content", "")
-                    if content:
-                        return content
-
-            # 回退：从文章页面 HTML 提取
-            page_url = f"https://zhuanlan.zhihu.com/p/{article_id}"
-            async with session.get(page_url, headers=headers) as resp:
-                if resp.status != 200:
-                    return ""
-                html = await resp.text()
-
-            # 从 js-initialData 提取
-            data_match = re.search(
-                r'<script\s+id="js-initialData"\s+type="text/json">(.*?)</script>',
-                html,
-                re.DOTALL,
-            )
-            if data_match:
-                init_data = json.loads(data_match.group(1))
-                articles = (
-                    init_data.get("initialState", {})
-                    .get("entities", {})
-                    .get("articles", {})
-                )
-                for _, article in articles.items():
-                    content = article.get("content", "")
-                    if content:
-                        return content
-
-        except Exception as e:
-            logger.warning(f"获取文章内容失败 (ID: {article_id}): {e}")
-
-        return ""
+    def _is_today_article(self, title: str, today: str) -> bool:
+        """检查文章标题是否包含今天的日期，判断是否为当日文章。"""
+        # 标题格式示例："AI 早报 2026-02-28"
+        return today in title
 
     # ==================== AI 总结 ====================
 
@@ -459,7 +428,7 @@ class DailyAINewsPlugin(Star):
             f"📌 {article['title']}\n\n"
             f"{content}\n\n"
             f"{'=' * 28}\n"
-            f"🔗 原文链接：{article['url']}\n"
+            f"🔗 原文链接：{article.get('link', '')}\n"
             f"💡 发送 /ainews 随时获取最新资讯"
         )
 
