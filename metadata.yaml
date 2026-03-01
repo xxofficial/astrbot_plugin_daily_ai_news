@@ -1,6 +1,6 @@
 name: astrbot_plugin_daily_ai_news
 display_name: 每日AI资讯推送
-desc: 每天定时自动从多个 AI 资讯源抓取最新新闻并推送到 QQ 群，支持手动触发和订阅管理。
+desc: 订阅橘鸦AI日报并进行AI总结
 version: v1.0.0
-author: YourName
-repo: https://github.com/YourName/astrbot_plugin_daily_ai_news
+author: xx
+repo: https://github.com/xxofficial/astrbot_plugin_daily_ai_news
