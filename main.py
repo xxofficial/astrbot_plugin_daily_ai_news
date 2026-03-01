@@ -12,7 +12,7 @@ import aiohttp
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.event import MessageChain
-from astrbot.api.config import AstrBotConfig
+from astrbot.api import AstrBotConfig
 from astrbot.api.star import Context, Star, register
 from astrbot.api.star import StarTools
 from astrbot.api import logger
