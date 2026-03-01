@@ -12,6 +12,7 @@ import aiohttp
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.event import MessageChain
+from astrbot.api.config import AstrBotConfig
 from astrbot.api.star import Context, Star, register
 from astrbot.api.star import StarTools
 from astrbot.api import logger
@@ -41,8 +42,9 @@ SUMMARY_PROMPT = """你是一个专业的 AI 资讯编辑。请将以下 AI 早�
     "https://github.com/xxofficial/astrbot_plugin_daily_ai_news",
 )
 class DailyAINewsPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
         self._task: Optional[asyncio.Task] = None
 
         # 使用框架规范的数据目录
@@ -128,10 +130,9 @@ class DailyAINewsPlugin(Star):
     @filter.command("ainews_status")
     async def cmd_status(self, event: AstrMessageEvent):
         """查看推送状态"""
-        config = self.context.get_config()
-        hour = config.get("push_hour", 8)
-        minute = config.get("push_minute", 0)
-        poll_interval = config.get("rss_poll_interval", 600)
+        hour = self.config.get("push_hour", 8)
+        minute = self.config.get("push_minute", 0)
+        poll_interval = self.config.get("rss_poll_interval", 600)
         cmd_sub_count = len(self._cmd_subscriptions)
         cfg_groups = self._get_config_groups()
         cfg_group_count = len(cfg_groups)
@@ -161,10 +162,9 @@ class DailyAINewsPlugin(Star):
 
         while True:
             try:
-                config = self.context.get_config()
-                target_hour = config.get("push_hour", 8)
-                target_minute = config.get("push_minute", 0)
-                poll_interval = config.get("rss_poll_interval", 600)
+                target_hour = self.config.get("push_hour", 8)
+                target_minute = self.config.get("push_minute", 0)
+                poll_interval = self.config.get("rss_poll_interval", 600)
 
                 now = datetime.now()
                 target = now.replace(
@@ -222,9 +222,8 @@ class DailyAINewsPlugin(Star):
     async def _startup_compensation_check(self):
         """启动时补偿检查：若当前已过推送时间且当天未推送过，立即尝试推送。"""
         try:
-            config = self.context.get_config()
-            target_hour = config.get("push_hour", 8)
-            target_minute = config.get("push_minute", 0)
+            target_hour = self.config.get("push_hour", 8)
+            target_minute = self.config.get("push_minute", 0)
 
             now = datetime.now()
             today = now.strftime("%Y-%m-%d")
@@ -515,16 +514,14 @@ class DailyAINewsPlugin(Star):
 
     def _get_config_groups(self) -> List[str]:
         """从配置中获取手动填写的 QQ 群号列表。"""
-        config = self.context.get_config()
-        groups_text = config.get("subscribed_groups", "")
+        groups_text = self.config.get("subscribed_groups", "")
         if not groups_text or not groups_text.strip():
             return []
         return [g.strip() for g in groups_text.strip().split("\n") if g.strip()]
 
     def _get_config_users(self) -> List[str]:
         """从配置中获取手动填写的私聊 QQ 号列表。"""
-        config = self.context.get_config()
-        users_text = config.get("subscribed_users", "")
+        users_text = self.config.get("subscribed_users", "")
         if not users_text or not users_text.strip():
             return []
         return [u.strip() for u in users_text.strip().split("\n") if u.strip()]
