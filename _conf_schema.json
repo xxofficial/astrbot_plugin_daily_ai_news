@@ -17,6 +17,12 @@
 		"hint": "当 RSS 尚未更新当日内容时，每隔多少秒重新检查一次，默认 600 秒（10分钟）",
 		"default": 600
 	},
+	"enable_ai_summary": {
+		"type": "bool",
+		"description": "是否启用 AI 总结功能",
+		"hint": "启用后会对早报内容进行 AI 总结。如果网络不稳定导致超时，可关闭此功能直接显示原文摘要。",
+		"default": false
+	},
 	"subscribed_groups": {
 		"type": "text",
 		"description": "订阅推送的 QQ 群号（每行一个）",
@@ -27,6 +33,24 @@
 		"type": "text",
 		"description": "订阅推送的 QQ 号（私聊，每行一个）",
 		"hint": "手动填写需要私聊推送的 QQ 号，每行一个。也可通过私聊发送 /ainews_sub 指令来订阅。",
+		"default": ""
+	},
+	"lark_platform_id": {
+		"type": "text",
+		"description": "飞书机器人名称",
+		"hint": "在 AstrBot 平台配置中查看飞书机器人的名称/ID（如 Lark）",
+		"default": ""
+	},
+	"lark_users": {
+		"type": "text",
+		"description": "订阅推送的飞书用户 open_id（私聊，每行一个）",
+		"hint": "飞书用户的 open_id，每行一个。可在飞书开放平台或日志中查看。",
+		"default": ""
+	},
+	"lark_groups": {
+		"type": "text",
+		"description": "订阅推送的飞书群 chat_id（每行一个）",
+		"hint": "飞书群的 chat_id，每行一个。",
 		"default": ""
 	}
 }

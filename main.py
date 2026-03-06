@@ -139,6 +139,13 @@ class DailyAINewsPlugin(Star):
         cfg_group_count = len(cfg_groups)
         cfg_users = self._get_config_users()
         cfg_user_count = len(cfg_users)
+        
+        # 飞书
+        lark_platform_id = self.config.get("lark_platform_id", "")
+        lark_users = self._get_lark_users()
+        lark_user_count = len(lark_users)
+        lark_groups = self._get_lark_groups()
+        lark_group_count = len(lark_groups)
 
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
@@ -147,8 +154,11 @@ class DailyAINewsPlugin(Star):
             f"🔄 轮询间隔：{poll_interval} 秒\n"
             f"🤖 AI 总结：已启用\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
-            f"📋 配置群号数：{cfg_group_count}\n"
-            f"📋 配置私聊数：{cfg_user_count}\n"
+            f"📋 QQ 群号数：{cfg_group_count}\n"
+            f"📋 QQ 私聊数：{cfg_user_count}\n"
+            f"📋 飞书平台：{lark_platform_id or '未配置'}\n"
+            f"📋 飞书私聊数：{lark_user_count}\n"
+            f"📋 飞书群数：{lark_group_count}\n"
             f"📚 已推送日期缓存：{len(self._sent_dates)} 天\n"
             f"📚 已推送文章缓存：{len(self._sent_links)} 篇"
         )
@@ -581,10 +591,8 @@ class DailyAINewsPlugin(Star):
         
         # 尝试多个 API 端点
         api_endpoints = [
-            # API 1: UP 主投稿列表（可能需要 wbi 签名）
+            # API 1: UP 主投稿列表
             f"https://api.bilibili.com/x/space/arc/search?mid={BILIBILI_MID}&ps=5&tid=0&pn=1&order=pubdate",
-            # API 2: 获取用户信息（备用）
-            f"https://api.bilibili.com/x/space/acc/info?mid={BILIBILI_MID}",
         ]
         
         headers = {
@@ -593,7 +601,6 @@ class DailyAINewsPlugin(Star):
         }
         
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            # 尝试第一个 API
             try:
                 async with session.get(api_endpoints[0], headers=headers) as resp:
                     if resp.status == 200:
@@ -623,7 +630,7 @@ class DailyAINewsPlugin(Star):
             except Exception as e:
                 logger.warning(f"B 站 API 请求失败: {e}")
         
-        # 如果 API 都失败，返回 UP 主空间链接
+        # 如果 API 失败，返回 UP 主空间链接
         logger.info("B 站 API 不可用，返回 UP 主空间链接")
         return f"https://space.bilibili.com/{BILIBILI_MID}/"
 
@@ -641,19 +648,50 @@ class DailyAINewsPlugin(Star):
             return []
         return [u.strip() for u in users_text.strip().split("\n") if u.strip()]
 
+    def _get_lark_users(self) -> List[str]:
+        """从配置中获取飞书用户 open_id 列表。"""
+        users_text = self.config.get("lark_users", "")
+        if not users_text or not users_text.strip():
+            return []
+        return [u.strip() for u in users_text.strip().split("\n") if u.strip()]
+
+    def _get_lark_groups(self) -> List[str]:
+        """从配置中获取飞书群 chat_id 列表。"""
+        groups_text = self.config.get("lark_groups", "")
+        if not groups_text or not groups_text.strip():
+            return []
+        return [g.strip() for g in groups_text.strip().split("\n") if g.strip()]
+
     def _get_all_targets(self) -> Set[str]:
         """获取所有推送目标。"""
         targets = set(self._cmd_subscriptions)
 
+        # QQ 群
         cfg_groups = self._get_config_groups()
         for group_id in cfg_groups:
             umo = f"default:GroupMessage:{group_id}"
             targets.add(umo)
 
+        # QQ 用户
         cfg_users = self._get_config_users()
         for user_id in cfg_users:
             umo = f"default:FriendMessage:{user_id}"
             targets.add(umo)
+
+        # 飞书
+        lark_platform_id = self.config.get("lark_platform_id", "").strip()
+        if lark_platform_id:
+            # 飞书用户
+            lark_users = self._get_lark_users()
+            for open_id in lark_users:
+                umo = f"{lark_platform_id}:FriendMessage:{open_id}"
+                targets.add(umo)
+            
+            # 飞书群
+            lark_groups = self._get_lark_groups()
+            for chat_id in lark_groups:
+                umo = f"{lark_platform_id}:GroupMessage:{chat_id}"
+                targets.add(umo)
 
         return targets
 
