@@ -324,13 +324,24 @@ class DailyAINewsPlugin(Star):
         self, article: Dict, article_date: str
     ) -> Optional[str]:
         """获取指定日期的 AI 总结，优先使用缓存。"""
+        # 检查是否启用 AI 总结
+        enable_ai_summary = self.config.get("enable_ai_summary", False)
+        video_links = article.get("video_links", [])
+        
+        # 如果禁用 AI 总结，直接使用 fallback 格式
+        if not enable_ai_summary:
+            logger.info("AI 总结功能已禁用，使用原文摘要")
+            return self._format_fallback(article, article_date)
+        
         # 检查缓存
         cache = await self._read_summary_cache()
         cached = cache.get(article_date)
         if cached:
             logger.info(f"使用缓存的 AI 总结 ({article_date})")
+            # 使用缓存的视频链接，如果没有则使用当前的
+            cached_video_links = cached.get("video_links", video_links)
             return self._format_summary(
-                cached["title"], cached["url"], cached["summary"], article_date
+                cached["title"], cached["url"], cached["summary"], article_date, cached_video_links
             )
 
         # 缓存未命中，进行 AI 总结
@@ -342,10 +353,11 @@ class DailyAINewsPlugin(Star):
                 "title": article["title"],
                 "url": article["link"],
                 "summary": summary,
+                "video_links": video_links,
             }
             await self._save_summary_cache(cache)
             return self._format_summary(
-                article["title"], article["link"], summary, article_date
+                article["title"], article["link"], summary, article_date, video_links
             )
         else:
             return self._format_fallback(article, article_date)
@@ -394,6 +406,14 @@ class DailyAINewsPlugin(Star):
 
             # 清理 HTML（description 可能包含 HTML 标签）
             content = self._clean_html(description)
+            # 提取视频链接（B站、YouTube等）
+            video_links = self._extract_video_links(description)
+            
+            # 如果 RSS 中没有视频链接，尝试从 B 站 API 获取最新视频
+            if not video_links:
+                bilibili_video = await self._fetch_bilibili_latest_video()
+                if bilibili_video:
+                    video_links.append(bilibili_video)
 
             logger.info(f"RSS 获取到最新文章：{title}")
             return {
@@ -401,6 +421,7 @@ class DailyAINewsPlugin(Star):
                 "link": link,
                 "content": content,
                 "pub_date": pub_date,
+                "video_links": video_links,
             }
 
         except ET.ParseError as e:
@@ -470,9 +491,15 @@ class DailyAINewsPlugin(Star):
     # ==================== 格式化输出 ====================
 
     def _format_summary(
-        self, title: str, url: str, summary: str, article_date: str
+        self, title: str, url: str, summary: str, article_date: str, video_links: List[str] = None
     ) -> str:
         """格式化 AI 总结后的推送文本。"""
+        video_section = ""
+        if video_links:
+            video_section = "\n🎬 相关视频：\n"
+            for i, link in enumerate(video_links, 1):
+                video_section += f"  {i}. {link}\n"
+        
         return (
             f"📰 AI 早报速递 | {article_date}\n"
             f"{'=' * 28}\n\n"
@@ -481,6 +508,7 @@ class DailyAINewsPlugin(Star):
             f"{summary}\n\n"
             f"{'=' * 28}\n"
             f"🔗 原文链接：{url}\n"
+            f"{video_section}"
             f"💡 发送 /ainews 随时获取最新资讯"
         )
 
@@ -489,6 +517,13 @@ class DailyAINewsPlugin(Star):
         content = article.get("content", "")
         if len(content) > 500:
             content = content[:500] + "..."
+        
+        video_links = article.get("video_links", [])
+        video_section = ""
+        if video_links:
+            video_section = "\n🎬 相关视频：\n"
+            for i, link in enumerate(video_links, 1):
+                video_section += f"  {i}. {link}\n"
 
         return (
             f"📰 AI 早报 | {article_date}\n"
@@ -497,13 +532,14 @@ class DailyAINewsPlugin(Star):
             f"{content}\n\n"
             f"{'=' * 28}\n"
             f"🔗 原文链接：{article.get('link', '')}\n"
+            f"{video_section}"
             f"💡 发送 /ainews 随时获取最新资讯"
         )
 
     # ==================== 工具方法 ====================
 
     def _clean_html(self, text: str) -> str:
-        """去除 HTML 标签，转为纯文本。"""
+        """去除 HTML 标签，转为纯文本。返回清理后的文本。"""
         if not text:
             return ""
         clean = re.sub(r"<[^>]+>", "", text)
@@ -512,6 +548,84 @@ class DailyAINewsPlugin(Star):
         clean = clean.replace("&quot;", '"')
         clean = re.sub(r"\n{3,}", "\n\n", clean)
         return clean.strip()
+
+    def _extract_video_links(self, text: str) -> List[str]:
+        """从 HTML 内容中提取视频链接（B站、YouTube等）。"""
+        video_links = []
+        # B站链接模式：bilibili.com/video 或 b23.tv 短链接
+        bilibili_patterns = [
+            r'https?://(?:www\.)?bilibili\.com/video/[^\s<>"\']+',
+            r'https?://b23\.tv/[^\s<>"\']+',
+        ]
+        # YouTube 链接模式
+        youtube_patterns = [
+            r'https?://(?:www\.)?youtube\.com/watch\?v=[^\s<>"\']+',
+            r'https?://youtu\.be/[^\s<>"\']+',
+        ]
+        
+        all_patterns = bilibili_patterns + youtube_patterns
+        for pattern in all_patterns:
+            matches = re.findall(pattern, text)
+            for link in matches:
+                # 清理链接末尾可能的多余字符
+                link = re.sub(r'[.,;:!?）】\)]+$', '', link)
+                if link not in video_links:
+                    video_links.append(link)
+        
+        return video_links
+
+    async def _fetch_bilibili_latest_video(self) -> Optional[str]:
+        """从 B 站 API 获取橘鸦 Juya 最新视频链接。"""
+        # 橘鸦 Juya 的 B 站 mid
+        BILIBILI_MID = "285286947"
+        
+        # 尝试多个 API 端点
+        api_endpoints = [
+            # API 1: UP 主投稿列表（可能需要 wbi 签名）
+            f"https://api.bilibili.com/x/space/arc/search?mid={BILIBILI_MID}&ps=5&tid=0&pn=1&order=pubdate",
+            # API 2: 获取用户信息（备用）
+            f"https://api.bilibili.com/x/space/acc/info?mid={BILIBILI_MID}",
+        ]
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": f"https://space.bilibili.com/{BILIBILI_MID}/",
+        }
+        
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            # 尝试第一个 API
+            try:
+                async with session.get(api_endpoints[0], headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("code") == 0:
+                            vlist = data.get("data", {}).get("list", {}).get("vlist", [])
+                            if vlist:
+                                # 查找标题包含 "AI 早报" 的最新视频
+                                for video in vlist:
+                                    title = video.get("title", "")
+                                    if "AI 早报" in title or "AI早报" in title:
+                                        bvid = video.get("bvid")
+                                        if bvid:
+                                            video_url = f"https://www.bilibili.com/video/{bvid}"
+                                            logger.info(f"获取到 B 站最新视频: {title}")
+                                            return video_url
+                                
+                                # 如果没找到 AI 早报视频，返回最新视频
+                                latest = vlist[0]
+                                bvid = latest.get("bvid")
+                                if bvid:
+                                    video_url = f"https://www.bilibili.com/video/{bvid}"
+                                    logger.info(f"获取到 B 站最新视频: {latest.get('title', '')}")
+                                    return video_url
+                        else:
+                            logger.warning(f"B 站 API 返回错误: {data.get('message', '未知错误')}")
+            except Exception as e:
+                logger.warning(f"B 站 API 请求失败: {e}")
+        
+        # 如果 API 都失败，返回 UP 主空间链接
+        logger.info("B 站 API 不可用，返回 UP 主空间链接")
+        return f"https://space.bilibili.com/{BILIBILI_MID}/"
 
     def _get_config_groups(self) -> List[str]:
         """从配置中获取手动填写的 QQ 群号列表。"""
