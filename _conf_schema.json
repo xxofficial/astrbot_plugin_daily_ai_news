@@ -21,7 +21,13 @@
 		"type": "bool",
 		"description": "是否启用 AI 总结功能",
 		"hint": "启用后会对早报内容进行 AI 总结。如果网络不稳定导致超时，可关闭此功能直接显示原文摘要。",
-		"default": false
+		"default": true
+	},
+	"qq_platform_id": {
+		"type": "text",
+		"description": "QQ 平台适配器名称",
+		"hint": "用于 QQ 推送的平台前缀，原版星极默认留空即可或填写 aiocqhttp。如果使用其它适配器，可按需修改（如 default）。",
+		"default": "aiocqhttp"
 	},
 	"subscribed_groups": {
 		"type": "text",

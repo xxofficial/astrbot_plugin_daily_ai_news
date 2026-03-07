@@ -146,13 +146,16 @@ class DailyAINewsPlugin(Star):
         lark_user_count = len(lark_users)
         lark_groups = self._get_lark_groups()
         lark_group_count = len(lark_groups)
+        
+        enable_ai = self.config.get("enable_ai_summary", True)
+        ai_status = "已启用" if enable_ai else "未启用(原文摘要)"
 
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
             f"📡 数据源：RSS 订阅（橘鸦 AI 日报）\n"
             f"⏰ 首次检查时间：每天 {hour:02d}:{minute:02d}\n"
             f"🔄 轮询间隔：{poll_interval} 秒\n"
-            f"🤖 AI 总结：已启用\n"
+            f"🤖 AI 总结：{ai_status}\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
             f"📋 QQ 群号数：{cfg_group_count}\n"
             f"📋 QQ 私聊数：{cfg_user_count}\n"
@@ -335,7 +338,7 @@ class DailyAINewsPlugin(Star):
     ) -> Optional[str]:
         """获取指定日期的 AI 总结，优先使用缓存。"""
         # 检查是否启用 AI 总结
-        enable_ai_summary = self.config.get("enable_ai_summary", False)
+        enable_ai_summary = self.config.get("enable_ai_summary", True)
         video_links = article.get("video_links", [])
         
         # 如果禁用 AI 总结，直接使用 fallback 格式
@@ -666,16 +669,19 @@ class DailyAINewsPlugin(Star):
         """获取所有推送目标。"""
         targets = set(self._cmd_subscriptions)
 
+        # QQ 平台 ID，适配器平台前缀
+        qq_platform_id = self.config.get("qq_platform_id", "aiocqhttp").strip() or "aiocqhttp"
+
         # QQ 群
         cfg_groups = self._get_config_groups()
         for group_id in cfg_groups:
-            umo = f"default:GroupMessage:{group_id}"
+            umo = f"{qq_platform_id}:GroupMessage:{group_id}"
             targets.add(umo)
 
         # QQ 用户
         cfg_users = self._get_config_users()
         for user_id in cfg_users:
-            umo = f"default:FriendMessage:{user_id}"
+            umo = f"{qq_platform_id}:FriendMessage:{user_id}"
             targets.add(umo)
 
         # 飞书
