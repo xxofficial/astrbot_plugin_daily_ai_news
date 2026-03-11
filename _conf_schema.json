@@ -19,14 +19,14 @@
 	},
 	"subscribed_groups": {
 		"type": "text",
-		"description": "订阅推送的 QQ 群号（每行一个）",
-		"hint": "手动填写需要推送的 QQ 群号，每行一个。也可通过群内发送 /ainews_sub 指令来订阅。",
+		"description": "订阅推送的群聊列表（每行一个）",
+		"hint": "支持跨平台格式 {机器人名称}:{群聊ID}。如果不加前缀仅填纯数字，默认为 QQ 群号。也可通过群内发送 /ainews_sub 指令订阅。",
 		"default": ""
 	},
 	"subscribed_users": {
 		"type": "text",
-		"description": "订阅推送的 QQ 号（私聊，每行一个）",
-		"hint": "手动填写需要私聊推送的 QQ 号，每行一个。也可通过私聊发送 /ainews_sub 指令来订阅。",
+		"description": "订阅推送的私聊列表（每行一个）",
+		"hint": "支持跨平台格式 {机器人名称}:{私聊账号ID}。如果不加前缀仅填纯数字，默认为私聊 QQ 号。也可通过私聊发送 /ainews_sub 指令订阅。",
 		"default": ""
 	}
 }

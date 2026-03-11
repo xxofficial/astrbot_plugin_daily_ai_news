@@ -147,7 +147,7 @@ class DailyAINewsPlugin(Star):
             f"🔄 轮询间隔：{poll_interval} 秒\n"
             f"🤖 AI 总结：已启用\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
-            f"📋 配置群号数：{cfg_group_count}\n"
+            f"📋 配置群聊数：{cfg_group_count}\n"
             f"📋 配置私聊数：{cfg_user_count}\n"
             f"📚 已推送日期缓存：{len(self._sent_dates)} 天\n"
             f"📚 已推送文章缓存：{len(self._sent_links)} 篇"
@@ -514,14 +514,14 @@ class DailyAINewsPlugin(Star):
         return clean.strip()
 
     def _get_config_groups(self) -> List[str]:
-        """从配置中获取手动填写的 QQ 群号列表。"""
+        """从配置中获取手动填写的群聊列表（支持 {机器人名称}:{群聊ID} 格式或直接填纯数字）。"""
         groups_text = self.config.get("subscribed_groups", "")
         if not groups_text or not groups_text.strip():
             return []
         return [g.strip() for g in groups_text.strip().split("\n") if g.strip()]
 
     def _get_config_users(self) -> List[str]:
-        """从配置中获取手动填写的私聊 QQ 号列表。"""
+        """从配置中获取手动填写的私聊账号列表（支持 {机器人名称}:{私聊账号ID} 格式或直接填纯数字）。"""
         users_text = self.config.get("subscribed_users", "")
         if not users_text or not users_text.strip():
             return []
@@ -533,13 +533,27 @@ class DailyAINewsPlugin(Star):
 
         cfg_groups = self._get_config_groups()
         for group_id in cfg_groups:
-            umo = f"default:GroupMessage:{group_id}"
-            targets.add(umo)
+            parts = group_id.split(":")
+            if len(parts) == 2:
+                umo = f"{parts[0]}:GroupMessage:{parts[1]}"
+                targets.add(umo)
+            elif len(parts) == 3:
+                targets.add(group_id)
+            else:
+                umo = f"default:GroupMessage:{group_id}"
+                targets.add(umo)
 
         cfg_users = self._get_config_users()
         for user_id in cfg_users:
-            umo = f"default:FriendMessage:{user_id}"
-            targets.add(umo)
+            parts = user_id.split(":")
+            if len(parts) == 2:
+                umo = f"{parts[0]}:FriendMessage:{parts[1]}"
+                targets.add(umo)
+            elif len(parts) == 3:
+                targets.add(user_id)
+            else:
+                umo = f"default:FriendMessage:{user_id}"
+                targets.add(umo)
 
         return targets
 
