@@ -140,12 +140,13 @@ class DailyAINewsPlugin(Star):
         cfg_users = self._get_config_users()
         cfg_user_count = len(cfg_users)
 
+        ai_enabled = "已启用" if self.config.get("enable_ai_summary", True) else "已关闭"
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
             f"📡 数据源：RSS 订阅（橘鸦 AI 日报）\n"
             f"⏰ 首次检查时间：每天 {hour:02d}:{minute:02d}\n"
             f"🔄 轮询间隔：{poll_interval} 秒\n"
-            f"🤖 AI 总结：已启用\n"
+            f"🤖 AI 总结：{ai_enabled}\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
             f"📋 配置群聊数：{cfg_group_count}\n"
             f"📋 配置私聊数：{cfg_user_count}\n"
@@ -324,6 +325,11 @@ class DailyAINewsPlugin(Star):
         self, article: Dict, article_date: str
     ) -> Optional[str]:
         """获取指定日期的 AI 总结，优先使用缓存。"""
+        # 检查是否开启 AI 总结
+        if not self.config.get("enable_ai_summary", True):
+            logger.info("未开启 AI 总结，直接使用原文摘要")
+            return self._format_fallback(article, article_date)
+
         # 检查缓存
         cache = await self._read_summary_cache()
         cached = cache.get(article_date)

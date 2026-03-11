@@ -17,6 +17,12 @@
 		"hint": "当 RSS 尚未更新当日内容时，每隔多少秒重新检查一次，默认 600 秒（10分钟）",
 		"default": 600
 	},
+	"enable_ai_summary": {
+		"type": "bool",
+		"description": "是否开启 AI 总结",
+		"hint": "开启后，将调用配置的大模型对早报内容进行总结提炼。关闭则直接推送原文摘要。",
+		"default": true
+	},
 	"subscribed_groups": {
 		"type": "text",
 		"description": "订阅推送的群聊列表（每行一个）",
