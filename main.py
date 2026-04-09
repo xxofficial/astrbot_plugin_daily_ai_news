@@ -17,8 +17,16 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api.star import StarTools
 from astrbot.api import logger
 
-# RSS 订阅源配置
-RSS_URL = "https://imjuya.github.io/juya-ai-daily/rss.xml"
+# RSS 镜像源配置（按顺序故障切换）
+# 优先使用国内更常见的 RSSHub 公共实例，再回退原始 GitHub Pages 地址。
+DEFAULT_RSS_SOURCES = [
+    "https://rsshub.rssforever.com/github/issue/ImJuYa/juya-ai-daily",
+    "https://rsshub.feeded.xyz/github/issue/ImJuYa/juya-ai-daily",
+    "https://rsshub.app/github/issue/ImJuYa/juya-ai-daily",
+    "https://rsshub.moeyy.cn/github/issue/ImJuYa/juya-ai-daily",
+    "https://rsshub.pseudoyu.com/github/issue/ImJuYa/juya-ai-daily",
+    "https://imjuya.github.io/juya-ai-daily/rss.xml",
+]
 
 # AI 总结 prompt
 SUMMARY_PROMPT = """你是一个专业的 AI 资讯编辑。请将以下 AI 早报内容进行精炼总结，要求：
@@ -69,7 +77,7 @@ class DailyAINewsPlugin(Star):
         await self._load_sent_news()
 
         self._task = asyncio.create_task(self._schedule_loop())
-        logger.info("每日AI资讯推送插件已初始化（RSS 订阅 + AI 总结模式）")
+        logger.info("每日AI资讯推送插件已初始化（RSS 镜像源 + AI 总结模式）")
 
     # ==================== 指令处理 ====================
 
@@ -141,9 +149,10 @@ class DailyAINewsPlugin(Star):
         cfg_user_count = len(cfg_users)
 
         ai_enabled = "已启用" if self.config.get("enable_ai_summary", True) else "已关闭"
+        rss_sources = self._get_rss_sources()
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
-            f"📡 数据源：RSS 订阅（橘鸦 AI 日报）\n"
+            f"📡 RSS 镜像源：{len(rss_sources)} 个\n"
             f"⏰ 首次检查时间：每天 {hour:02d}:{minute:02d}\n"
             f"🔄 轮询间隔：{poll_interval} 秒\n"
             f"🤖 AI 总结：{ai_enabled}\n"
@@ -358,35 +367,69 @@ class DailyAINewsPlugin(Star):
 
     # ==================== RSS 获取 ====================
 
+    def _get_rss_sources(self) -> List[str]:
+        """获取 RSS 镜像源列表：用户自定义优先，内置国内优化源兜底，并自动去重。"""
+        rss_sources_text = self.config.get("rss_sources", "")
+        sources: List[str] = []
+        if rss_sources_text and rss_sources_text.strip():
+            sources.extend([
+                line.strip()
+                for line in rss_sources_text.strip().split("\n")
+                if line.strip()
+            ])
+
+        sources.extend(DEFAULT_RSS_SOURCES)
+
+        deduped_sources: List[str] = []
+        seen = set()
+        for source in sources:
+            if source not in seen:
+                seen.add(source)
+                deduped_sources.append(source)
+
+        return deduped_sources
+
     async def _fetch_rss_latest(self) -> Optional[Dict]:
-        """从 RSS 订阅源获取最新一篇文章。"""
+        """按顺序尝试 RSS 镜像源，获取最新一篇文章。"""
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; AstrBot/3.0; +https://github.com/AstrBot)",
+            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        }
+
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            for rss_url in self._get_rss_sources():
+                article = await self._fetch_single_rss_latest(session, rss_url, headers)
+                if article:
+                    return article
+
+        return None
+
+    async def _fetch_single_rss_latest(
+        self,
+        session: aiohttp.ClientSession,
+        rss_url: str,
+        headers: Dict[str, str],
+    ) -> Optional[Dict]:
+        """从单个 RSS 源获取最新文章。"""
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; AstrBot/3.0; +https://github.com/AstrBot)",
-                "Accept": "application/rss+xml, application/xml, text/xml, */*",
-            }
+            async with session.get(rss_url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning(f"RSS 源不可用，状态码 {resp.status}: {rss_url}")
+                    return None
 
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                async with session.get(RSS_URL, headers=headers) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"RSS 请求返回状态码 {resp.status}")
-                        return None
+                xml_text = await resp.text()
 
-                    xml_text = await resp.text()
-
-            # 解析 RSS XML
             root = ET.fromstring(xml_text)
             channel = root.find("channel")
             if channel is None:
-                logger.warning("RSS XML 中未找到 channel 元素")
+                logger.warning(f"RSS XML 中未找到 channel 元素: {rss_url}")
                 return None
 
-            # 获取第一个 item（最新文章）
             item = channel.find("item")
             if item is None:
-                logger.warning("RSS 中没有任何文章")
+                logger.warning(f"RSS 中没有任何文章: {rss_url}")
                 return None
 
             title = item.findtext("title", "").strip()
@@ -395,24 +438,24 @@ class DailyAINewsPlugin(Star):
             pub_date = item.findtext("pubDate", "").strip()
 
             if not title:
-                logger.warning("RSS 文章标题为空")
+                logger.warning(f"RSS 文章标题为空: {rss_url}")
                 return None
 
-            # 清理 HTML（description 可能包含 HTML 标签）
             content = self._clean_html(description)
 
-            logger.info(f"RSS 获取到最新文章：{title}")
+            logger.info(f"RSS 获取成功，使用源 {rss_url}，文章：{title}")
             return {
                 "title": title,
                 "link": link,
                 "content": content,
                 "pub_date": pub_date,
+                "source_url": rss_url,
             }
 
         except ET.ParseError as e:
-            logger.error(f"RSS XML 解析失败: {e}")
+            logger.error(f"RSS XML 解析失败 ({rss_url}): {e}")
         except Exception as e:
-            logger.error(f"RSS 获取失败: {type(e).__name__}: {e!r}")
+            logger.error(f"RSS 获取失败 ({rss_url}): {type(e).__name__}: {e!r}")
 
         return None
 

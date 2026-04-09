@@ -17,6 +17,12 @@
 		"hint": "当 RSS 尚未更新当日内容时，每隔多少秒重新检查一次，默认 600 秒（10分钟）",
 		"default": 600
 	},
+	"rss_sources": {
+		"type": "text",
+		"description": "RSS 镜像源列表（每行一个）",
+		"hint": "用于同一份 AI 日报的多个镜像 RSS 地址。插件会按填写顺序依次尝试，前一个失败时自动切换到下一个。留空时使用默认源。",
+		"default": ""
+	},
 	"enable_ai_summary": {
 		"type": "bool",
 		"description": "是否开启 AI 总结",
