@@ -141,12 +141,21 @@ class DailyAINewsPlugin(Star):
         cfg_user_count = len(cfg_users)
 
         ai_enabled = "已启用" if self.config.get("enable_ai_summary", True) else "已关闭"
+
+        # 获取当前使用的供应商信息
+        provider_id = self.config.get("summary_provider_id", "").strip()
+        if provider_id:
+            provider_info = f"指定供应商 (ID: {provider_id})"
+        else:
+            provider_info = "默认供应商"
+
         status_text = (
             "📊 **每日AI资讯推送状态**\n"
             f"📡 数据源：RSS 订阅（橘鸦 AI 日报）\n"
             f"⏰ 首次检查时间：每天 {hour:02d}:{minute:02d}\n"
             f"🔄 轮询间隔：{poll_interval} 秒\n"
             f"🤖 AI 总结：{ai_enabled}\n"
+            f"🔧 总结供应商：{provider_info}\n"
             f"📋 指令订阅数：{cmd_sub_count}\n"
             f"📋 配置群聊数：{cfg_group_count}\n"
             f"📋 配置私聊数：{cfg_user_count}\n"
@@ -154,6 +163,113 @@ class DailyAINewsPlugin(Star):
             f"📚 已推送文章缓存：{len(self._sent_links)} 篇"
         )
         yield event.plain_result(status_text)
+
+    @filter.command("ainews_providers")
+    async def cmd_list_providers(self, event: AstrMessageEvent):
+        """列出所有可用的 LLM 供应商"""
+        try:
+            providers = self.context.get_all_providers()
+            if not providers:
+                yield event.plain_result("😞 当前没有配置任何 LLM 供应商，请先在 AstrBot 管理面板中添加。")
+                return
+
+            # 获取当前配置的供应商 ID
+            current_id = self.config.get("summary_provider_id", "").strip()
+            default_provider = self.context.get_using_provider()
+
+            lines = ["🔧 **可用的 LLM 供应商列表**\n"]
+            for p in providers:
+                try:
+                    meta = p.meta()
+                    pid = meta.id if hasattr(meta, 'id') else str(id(p))
+                    model = p.get_model() if hasattr(p, 'get_model') else '未知'
+                    ptype = meta.type if hasattr(meta, 'type') else '未知'
+
+                    # 标记当前选中的和默认的
+                    markers = []
+                    if current_id and pid == current_id:
+                        markers.append("✅ 当前选中")
+                    if default_provider and p == default_provider:
+                        markers.append("⭐ 默认")
+                    marker_str = f" ({', '.join(markers)})" if markers else ""
+
+                    lines.append(
+                        f"• ID: `{pid}`{marker_str}\n"
+                        f"  模型: {model}\n"
+                        f"  类型: {ptype}"
+                    )
+                except Exception:
+                    lines.append(f"• (无法获取供应商信息)")
+
+            lines.append(f"\n💡 使用方法：")
+            lines.append(f"  发送 /ainews_setprovider <ID> 快速切换")
+            lines.append(f"  或在插件配置中设置 summary_provider_id")
+
+            yield event.plain_result("\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"列出供应商失败: {e}")
+            yield event.plain_result(f"❌ 获取供应商列表失败: {e}")
+
+    @filter.command("ainews_setprovider")
+    async def cmd_set_provider(self, event: AstrMessageEvent):
+        """设置 AI 总结使用的供应商 ID"""
+        # 获取指令参数（event.message_str 包含完整指令文本，需去掉指令名）
+        raw = event.message_str.strip()
+        # 去掉开头的指令名称部分
+        if raw.lower().startswith("ainews_setprovider"):
+            msg_str = raw[len("ainews_setprovider"):].strip()
+        else:
+            msg_str = raw
+        if not msg_str:
+            current_id = self.config.get("summary_provider_id", "").strip()
+            if current_id:
+                yield event.plain_result(
+                    f"🔧 当前总结供应商 ID: `{current_id}`\n\n"
+                    f"用法：\n"
+                    f"  /ainews_setprovider <供应商ID> - 切换供应商\n"
+                    f"  /ainews_setprovider default - 恢复使用默认供应商\n"
+                    f"  /ainews_providers - 查看所有可用供应商"
+                )
+            else:
+                yield event.plain_result(
+                    f"🔧 当前使用默认供应商进行 AI 总结\n\n"
+                    f"用法：\n"
+                    f"  /ainews_setprovider <供应商ID> - 切换供应商\n"
+                    f"  /ainews_providers - 查看所有可用供应商"
+                )
+            return
+
+        provider_id = msg_str.strip()
+
+        # 恢复默认
+        if provider_id.lower() == "default":
+            self.config["summary_provider_id"] = ""
+            yield event.plain_result("✅ 已恢复使用默认供应商进行 AI 总结。")
+            return
+
+        # 验证供应商 ID 是否有效
+        try:
+            provider = self.context.get_provider_by_id(provider_id)
+            if provider is None:
+                yield event.plain_result(
+                    f"❌ 未找到 ID 为 `{provider_id}` 的供应商。\n"
+                    f"请使用 /ainews_providers 查看所有可用的供应商 ID。"
+                )
+                return
+
+            self.config["summary_provider_id"] = provider_id
+
+            model = provider.get_model() if hasattr(provider, 'get_model') else '未知'
+            yield event.plain_result(
+                f"✅ AI 总结供应商已切换为:\n"
+                f"  ID: `{provider_id}`\n"
+                f"  模型: {model}\n\n"
+                f"💡 发送 /ainews_setprovider default 可恢复默认供应商"
+            )
+        except Exception as e:
+            logger.error(f"设置供应商失败: {e}")
+            yield event.plain_result(f"❌ 设置供应商失败: {e}")
 
     # ==================== 定时 + 轮询推送 ====================
 
@@ -438,8 +554,41 @@ class DailyAINewsPlugin(Star):
 
     # ==================== AI 总结 ====================
 
+    def _get_summary_provider(self):
+        """获取用于 AI 总结的 LLM 供应商。
+        
+        优先使用配置中指定的供应商 ID，如果未指定或获取失败则回退到默认供应商。
+        """
+        provider_id = self.config.get("summary_provider_id", "").strip()
+
+        if provider_id:
+            try:
+                provider = self.context.get_provider_by_id(provider_id)
+                if provider is not None:
+                    model = provider.get_model() if hasattr(provider, 'get_model') else '未知'
+                    logger.info(f"使用指定的供应商进行 AI 总结 (ID: {provider_id}, 模型: {model})")
+                    return provider
+                else:
+                    logger.warning(
+                        f"配置的供应商 ID '{provider_id}' 未找到，将回退到默认供应商。"
+                        f"请使用 /ainews_providers 查看可用的供应商。"
+                    )
+            except Exception as e:
+                logger.warning(f"获取指定供应商 '{provider_id}' 失败: {e}，将回退到默认供应商")
+
+        # 回退到默认供应商
+        provider = self.context.get_using_provider()
+        if provider is not None:
+            model = provider.get_model() if hasattr(provider, 'get_model') else '未知'
+            logger.info(f"使用默认供应商进行 AI 总结 (模型: {model})")
+        return provider
+
     async def _summarize_with_ai(self, content: str) -> Optional[str]:
-        """使用 AstrBot 内置 LLM 对内容进行总结。"""
+        """使用 AstrBot 内置 LLM 对内容进行总结。
+        
+        支持通过 summary_provider_id 配置指定供应商，
+        未指定或指定的供应商不可用时自动回退到默认供应商。
+        """
         if not content or len(content.strip()) < 50:
             logger.warning("文章内容过短，跳过 AI 总结")
             return None
@@ -452,8 +601,8 @@ class DailyAINewsPlugin(Star):
 
             prompt = SUMMARY_PROMPT.format(content=content)
 
-            # 使用 AstrBot 提供的 LLM 接口
-            provider = self.context.get_using_provider()
+            # 获取供应商（支持手动选择）
+            provider = self._get_summary_provider()
             if provider is None:
                 logger.warning("未配置 LLM provider，无法进行 AI 总结")
                 return None
@@ -471,6 +620,14 @@ class DailyAINewsPlugin(Star):
 
         except Exception as e:
             logger.error(f"AI 总结失败: {e}")
+            # 如果使用了指定供应商失败，提示用户可以尝试其他供应商
+            provider_id = self.config.get("summary_provider_id", "").strip()
+            if provider_id:
+                logger.info(
+                    f"提示：当前使用供应商 '{provider_id}' 总结失败，"
+                    f"可尝试 /ainews_setprovider default 切换回默认供应商，"
+                    f"或 /ainews_providers 查看其他可用供应商。"
+                )
             return None
 
     # ==================== 格式化输出 ====================

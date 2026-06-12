@@ -23,6 +23,12 @@
 		"hint": "开启后，将调用配置的大模型对早报内容进行总结提炼。关闭则直接推送原文摘要。",
 		"default": true
 	},
+	"summary_provider_id": {
+		"type": "string",
+		"description": "AI 总结使用的供应商 ID",
+		"hint": "留空则使用 AstrBot 默认供应商。可通过发送 /ainews_providers 查看所有可用的供应商 ID。如遇到 AI 总结失败，请尝试切换为其他供应商。",
+		"default": ""
+	},
 	"subscribed_groups": {
 		"type": "text",
 		"description": "订阅推送的群聊列表（每行一个）",
