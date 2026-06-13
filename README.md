@@ -2,7 +2,7 @@
 
 每日 AI 资讯自动推送插件 - 为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 开发
 
-通过 RSS 订阅 [橘鸦 AI 日报](https://imjuya.github.io/juya-ai-daily/) 获取最新 AI 早报，经 **AI 总结** 后自动推送到 QQ 群 / 私聊。
+通过 RSS 订阅 [橘鸦 AI 日报](https://daily.juya.uk/rss.xml) 获取最新 AI 早报，经 **AI 总结** 后自动推送到 QQ 群 / 私聊。
 
 ## ✨ 功能
 
@@ -51,8 +51,7 @@
 
 ## 📝 更新日志
 
-- ✨ 新增了多平台的支持。
-- ⚙️ 新增了开启/关闭 AI 总结的选项支持。
+详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 📄 License
 
